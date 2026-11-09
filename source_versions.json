@@ -1,0 +1,7 @@
+{
+  "conversation_app": {
+    "url": "https://github.com/pollen-robotics/reachy_mini_conversation_app",
+    "commit": "5eb39ed1c96790390363cca85d4088ff27a0fdff"
+  },
+  "python": "3.12"
+}

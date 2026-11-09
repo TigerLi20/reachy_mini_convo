@@ -1,0 +1,3 @@
+[submodule "vendor/conversation_app"]
+	path = vendor/conversation_app
+	url = https://github.com/pollen-robotics/reachy_mini_conversation_app.git
