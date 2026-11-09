@@ -88,6 +88,16 @@ class MemoryTests(unittest.TestCase):
         self.identity.result = {'state': 'unknown', 'reason': 'no_confident_match', 'face_count': 1}
         self.assertEqual(self.memory.session(True, 3, 'Yes')['status'], 'temporary_only')
 
+    def test_named_greeting_precedes_confirmation_without_loading_history(self):
+        self.bind()
+        self.fact()
+        fresh = RelationalMemory(self.store, self.identity, self.models, self.worker)
+        fresh.attach_backend()
+        result = fresh.session(False, 1, 'hello')
+        self.assertEqual(result['question'], 'Hi, Alice! Would you like me to open your personal memory?')
+        self.assertIsNone(fresh.person_id)
+        self.assertNotIn('Milo', json.dumps(fresh.context()))
+
     def test_distinct_people_keep_conflicting_facts_after_reopening_database(self):
         self.bind('alice')
         self.assertEqual(self.fact('Milo')['status'], 'saved')
@@ -205,16 +215,90 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(guarded()['status'], 'cancelled_context_changed')
         callback.assert_not_called()
 
-    def test_brief_uncertainty_pauses_operations_and_sustained_loss_resets_context(self):
+    def test_confirmed_session_survives_dropout_then_expires_once_at_20_seconds(self):
+        for scene in [{'state': 'unknown', 'reason': 'no_face', 'face_count': 0},
+                      {'state': 'unknown', 'reason': 'no_confident_match', 'face_count': 1}]:
+            with self.subTest(scene=scene), patch('relational_memory.monotonic', return_value=100) as clock:
+                self.bind()
+                original_scope = self.memory.scope()
+                self.identity.result = scene
+                self.memory.tick()
+                clock.return_value = 119.9
+                self.assertEqual(self.memory.scope(), original_scope)
+                self.assertIn(self.fact()['status'], ('saved', 'unchanged'))
+                self.assertEqual(self.memory.session(False, 20, 'hello')['status'], 'bound')
+                self.assertTrue(self.memory.output_allowed(original_scope.epoch))
+                clock.return_value = 120
+                self.memory.tick()
+                self.assertIsNone(self.memory.person_id)
+                self.assertEqual(self.memory.notice, 'identity_lost')
+                self.assertFalse(self.memory.output_allowed(original_scope.epoch))
+                self.assertEqual(self.memory.operation('review')['status'], 'blocked')
+                self.assertNotIn('Milo', json.dumps(self.memory.context()))
+                ended_epoch = self.memory.attach_backend()
+                clock.return_value = 150
+                self.memory.tick()
+                self.assertEqual(self.memory.epoch, ended_epoch)  # No repeated adjustment prompt/restart.
+
+    def test_reacquisition_preserves_session_and_restarts_loss_timer(self):
         with patch('relational_memory.monotonic', return_value=100) as clock:
             self.bind()
+            original_scope = self.memory.scope()
+            for start in [100, 130]:
+                clock.return_value = start
+                self.identity.result = {'state': 'unknown', 'reason': 'no_face', 'face_count': 0}
+                self.memory.tick()
+                clock.return_value = start + 19
+                self.identity.person('alice')
+                self.assertEqual(self.memory.scope(), original_scope)
+                self.assertIsNone(self.memory.uncertain_at)
+
+    def test_group_or_different_person_during_grace_revokes_session_immediately(self):
+        for scene in [{'state': 'unknown', 'reason': 'multiple_faces', 'face_count': 2},
+                      {'state': 'known', 'person_id': 'bob', 'name': 'Bob', 'face_count': 1}]:
+            with self.subTest(scene=scene), patch('relational_memory.monotonic', return_value=100) as clock:
+                self.bind()
+                epoch = self.memory.epoch
+                self.identity.result = {'state': 'unknown', 'reason': 'no_face', 'face_count': 0}
+                self.memory.tick()
+                clock.return_value = 101
+                self.identity.result = scene
+                self.assertFalse(self.memory.output_allowed(epoch))
+                self.assertIsNone(self.memory.person_id)
+                self.assertIsNone(self.memory.confirmed_identity())
+
+    def test_identity_tool_keeps_confirmed_name_during_grace_without_waiting(self):
+        with patch('relational_memory.monotonic', return_value=100):
+            self.bind()
             self.identity.result = {'state': 'unknown', 'reason': 'no_face', 'face_count': 0}
-            self.assertEqual(self.memory.operation('review')['status'], 'blocked')
-            self.assertEqual(self.memory.person_id, 'alice')
-            clock.return_value = 102
-            self.memory.tick()
-            self.assertIsNone(self.memory.person_id)
-            self.assertFalse(self.memory.output_allowed())
+            media = TimedMedia(Mock(), ConversationTiming(Path(self.directory.name)/'timing.jsonl'))
+            media.relational, media.recognition = self.memory, self.identity
+            origin = ToolOrigin(self.memory.epoch, self.memory.scope(), None, 1, 'hello', self.memory.runtime_id)
+            token = tool_origin.set(origin)
+            try:
+                with patch('conversation_runtime.asyncio.sleep', new=AsyncMock()) as wait:
+                    result = asyncio.run(media.person_identity())
+                    wait.assert_not_awaited()
+                self.assertEqual(result['state'], 'session_confirmed')
+                self.assertEqual(result['name'], 'Alice')
+            finally:
+                tool_origin.reset(token)
+
+    def test_explicit_identity_correction_ends_grace_immediately(self):
+        self.bind()
+        self.identity.result = {'state': 'unknown', 'reason': 'no_face', 'face_count': 0}
+        media = TimedMedia(Mock(), ConversationTiming(Path(self.directory.name)/'timing.jsonl'))
+        media.relational, media.recognition = self.memory, self.identity
+        self.identity.reject_current = Mock(return_value={'state': 'unknown', 'reason': 'identity_rejected'})
+        origin = ToolOrigin(self.memory.epoch, self.memory.scope(), None, 1, 'Not Alice', self.memory.runtime_id)
+        token = tool_origin.set(origin)
+        try:
+            asyncio.run(media.person_identity(reject_current=True))
+        finally:
+            tool_origin.reset(token)
+        self.assertIsNone(self.memory.person_id)
+        self.assertIsNone(self.memory.scope())
+        self.assertEqual(self.memory.notice, 'identity_rejected')
 
     def test_source_quote_cannot_be_fabricated_or_belong_to_another_person(self):
         self.bind()

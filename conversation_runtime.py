@@ -187,9 +187,18 @@ class TimedMedia:
         if self.recognition is None:
             return {"state": "unknown", "reason": "recognition_disabled_or_unavailable"}
         if reject_current:
-            return self.recognition.reject_current()
+            result = self.recognition.reject_current()
+            if self.relational is not None:
+                self.relational.reject_identity()
+            return result
         deadline = monotonic() + 6
         while True:
+            if self.relational is not None:
+                if self.current_origin() is None:
+                    return {"state": "unknown", "reason": "context_changed"}
+                confirmed = self.relational.confirmed_identity()
+                if confirmed is not None:
+                    return confirmed
             result = self.recognition.snapshot()
             if result["state"] == "known" or monotonic() >= deadline:
                 if result["state"] == "unknown":

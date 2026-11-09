@@ -79,14 +79,21 @@ from sound direction or select the largest face as the memory owner. Entry of a
 second face or a recognized person change cancels private playback/results and
 replaces the old backend context. Generic group chat is allowed afterward. Once
 one person remains, recognition and explicit session confirmation are required
-again. Brief single-person recognition dropouts pause memory reads/writes;
-sustained uncertainty over 1.5 seconds ends the private context. Attention states
-and smooth orientation continue independently.
+again. After initial recognition, Reachy greets the person by name before asking
+to open their personal memory. Once confirmed, that session (including memory
+reads/writes) survives visual uncertainty for up to 20 seconds while recognition
+retries silently. Reacquisition within that window needs no new confirmation.
+At 20 seconds of continuous uncertainty, private context ends and Reachy asks
+once for a camera adjustment, then allows general conversation. An identity
+correction also ends the session immediately. Attention states and smooth
+orientation continue independently.
 
 This depends on the camera actually detecting visible faces. There is no speaker
 verification or off-camera voice attribution: test with one active speaker.
 Someone speaking off camera while another person's face is visible cannot be
 reliably distinguished by this implementation.
+During the 20-second grace period, continuity assumes the confirmed person is
+still speaking; it cannot detect an off-camera or unrecognized replacement speaker.
 
 Corrections update the current fact, redact the obsolete value from scoped
 dialogue/quotes, invalidate derived summaries/index entries, and replace active

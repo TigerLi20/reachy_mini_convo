@@ -66,11 +66,12 @@ class MemoryRealtimeHandler(HuggingFaceRealtimeHandler):
             self._startup_greeting_sent = True
             return
         messages = {
-            "memory_bound": "The user confirmed this private memory session. Greet them briefly by the name in the memory context. Do not ask for identity confirmation again. Invite conversation naturally.",
+            "memory_bound": "The user just said yes to opening personal memory after your named greeting. Briefly acknowledge that memory is open and invite conversation naturally. Do not greet them again or ask for identity confirmation again.",
             "multiple_people": "Several people are visible. Say briefly that personal memory is paused and you can chat generally, or one person can stay in view to continue privately. Do not name anybody or reveal personal history.",
             "confirm_new_person": "A fresh conversation is starting with one person. Check person_identity, then offer memory_session confirmation if recognized. Do not use any prior person's conversation.",
             "person_changed": "A different person is now visible. Start fresh: check person_identity and offer memory_session confirmation. No previous person's history is available.",
-            "identity_lost": "The private session ended because identity could not be verified. Say personal memory is paused; ask one person to face the camera for a fresh check. Do not mention any previous personal information.",
+            "identity_lost": "Identity could not be verified for at least 20 seconds. Once, without apologizing, say personal memory is paused and ask the person to face the camera for a fresh check. Continue general conversation while waiting; do not repeatedly ask for camera adjustments. Do not mention any previous personal information.",
+            "identity_rejected": "The person corrected the recognized identity. Personal memory is closed. Ask what to call them and continue without any previous person's history. Do not reuse the rejected name.",
             "memory_corrected": "A memory correction was saved and the obsolete value removed from context. Acknowledge briefly without repeating the old value, then continue naturally.",
             "memory_deleted": "The requested fact and related derived copies were removed. Acknowledge briefly without repeating the forgotten information.",
             "all_memories_deleted": "All of this person's conversation memories were cleared. Acknowledge briefly. Their face/name enrollment remains. Do not refer to earlier conversation details.",

@@ -12,6 +12,8 @@ from relational_store import normalized
 
 logger = logging.getLogger(__name__)
 
+IDENTITY_LOSS_GRACE_SECONDS = 20.0
+
 
 @dataclass(frozen=True)
 class MemoryScope:
@@ -75,11 +77,13 @@ class RelationalMemory:
             mode = "group" if group else "single" if known else "unknown"
             if self.person_id is not None:
                 changed = known and scene["person_id"] != self.person_id
-                if group or changed:
-                    self._reset("multiple_people" if group else "person_changed", unbind=True)
+                rejected = scene.get("reason") == "identity_rejected"
+                if group or changed or rejected:
+                    reason = "multiple_people" if group else "person_changed" if changed else "identity_rejected"
+                    self._reset(reason, unbind=True)
                 elif not known:
                     self.uncertain_at = now if self.uncertain_at is None else self.uncertain_at
-                    if now - self.uncertain_at > 1.5:
+                    if now - self.uncertain_at >= IDENTITY_LOSS_GRACE_SECONDS:
                         self._reset("identity_lost", unbind=True)
                 else:
                     self.uncertain_at = None
@@ -95,12 +99,26 @@ class RelationalMemory:
             return scene
 
     def scope(self) -> MemoryScope | None:
-        scene = self.tick()
         with self.lock:
-            if (not self.closing and self.person_id and self.backend_epoch == self.epoch and scene.get("face_count") == 1
-                    and scene.get("state") == "known" and scene.get("person_id") == self.person_id):
+            self.tick()
+            # A confirmed session survives brief visual dropouts. tick revokes it
+            # immediately for groups/different identities, or after the grace period.
+            if not self.closing and self.person_id and self.backend_epoch == self.epoch:
                 return MemoryScope(self.person_id, self.session_id, self.epoch)
             return None
+
+    def confirmed_identity(self) -> dict | None:
+        with self.lock:
+            if self.scope() is None:
+                return None
+            return {"state": "session_confirmed", "person_id": self.person_id, "name": self.name,
+                    "instruction": "This identity was already confirmed for the active memory session. Continue naturally using their name. Reacquire the face silently; do not apologize, ask for a camera adjustment, or ask to open memory again. This is session continuity, not a fresh visual match."}
+
+    def reject_identity(self) -> None:
+        with self.lock:
+            if self.person_id is not None:
+                self._reset("identity_rejected", unbind=True)
+            self.pending = None
 
     def valid(self, scope: MemoryScope | None) -> bool:
         return scope is not None and scope == self.scope()
@@ -129,7 +147,8 @@ class RelationalMemory:
                     or monotonic() - pending["at"] > 60):
                 self.pending = {"person_id": scene["person_id"], "seq": transcript_seq, "at": monotonic()}
                 return {"status": "confirmation_required", "name": scene["name"],
-                        "instruction": f'Ask whether to continue as {scene["name"]} and use their personal memories. Wait for a new explicit yes.'}
+                        "question": f'Hi, {scene["name"]}! Would you like me to open your personal memory?',
+                        "instruction": "Say the returned question, including the recognized name, before doing anything else. Wait for a new explicit yes; no personal history has been loaded."}
             yes = re.match(r"^(yes|yeah|yep|correct|that['’]?s right|please do)\b", transcript.strip(), re.I)
             no = re.search(r"\b(no|not|wrong|instead|don['’]?t)\b", transcript, re.I)
             if transcript_seq <= pending["seq"] or not yes or no:
